@@ -1,10 +1,10 @@
-"""نواة استراتيجيات US500 (S&P 500) المؤسسية المتكيفة (US500 Institutional Adaptive Strategies).
+"""استراتيجيات صيد تحركات الحيتان وتدفقات الأوبشن لمؤشر SPX / US500 (Predictive Options Flow Strategies).
 
-تدمج 4 محركات مختبرة ومثبتة إحصائياً:
-1. [A] اختراق دونشيان اليومي المؤسسي (Donchian 55 Daily Breakout) — ركوب الاتجاه الصاعد التاريخي لـ S&P 500.
-2. [B] سحابة إيشيموكو وبولينجر 4H (Jesse Ichimoku Cloud Breakout) — حلب الاتجاه مع إغلاق منتصف بولينجر.
-3. [C] قنص كنس السيولة 4H (SMC Liquidity Sweep) — اصطياد فخاخ الدببة وصناع السوق عند كسر القيعان.
-4. [D] قنص تحركات التدفق والسيولة في التذبذب (Institutional Shadow Flow).
+مبنية على استباق حركة صناع السوق والحيتان وليس اللحاق بالسعر:
+1. [CALL_WALL_REJECT_PUT] بوت (PUT Short): اصطدام السعر بجدار الكول (Call Wall) أو قمة تدفق الشراء مع ظهور عقود بوت مؤسسية بملايين الدولارات.
+2. [CALL_WALL_REBOUND] كول (CALL Rebound): ارتداد السعر من جدار البوت الرئيسي (Put Wall) مع امتصاص بيع الحيتان وتكوين قاع.
+3. [GAMMA_CASCADE_PUT] بوت سريع (Short Gamma Cascade): السعر تحت منطقة الجاما السالبة الصافية وكسر دعم مع تدفق هبوطي مستمر.
+4. [INSTITUTIONAL_SWEEP_CALL] كول انفجاري (Institutional Sweep): رصد تدفق شراء كول ضخم (Block/Sweep > 10M$) مع معنويات أفراد متخوفة.
 """
 from __future__ import annotations
 
@@ -16,26 +16,58 @@ from typing import Dict, List, Optional, Tuple
 
 import config
 from capital_trader import client
+import options_intel
 
 @dataclass
 class StrategySpec:
     id: str
     name: str
+    contract_type: str  # "CALL" or "PUT"
     timeframe: str
     rr: float
     description: str
 
 SPECS: Dict[str, StrategySpec] = {
-    "A": StrategySpec("A", "الانفجار الشهري المؤسسي (Donchian 55)", "1d", 3.0, "ركوب موجات الصعود الكبرى بمؤشر US500 عند كسر قمة 55 يوماً فوق EMA200"),
-    "B": StrategySpec("B", "سحابة إيشيموكو وبولينجر 4H (Long Trend)", "4h", 2.0, "ركوب الاتجاه الصاعد فقط فوق متوسط 200 يوم لمؤشر US500"),
-    "C": StrategySpec("C", "قنص كنس السيولة SMC 30-Bar", "4h", 2.0, "اصطياد فخاخ الدببة وكنس قاع 30 شمعة لمؤشر US500"),
-    "D": StrategySpec("D", "قنص تدفق السيولة المؤسسية (Institutional Shadow Flow)", "4h", 1.67, "اصطياد التجميع والتصريف عبر تدفق السيولة MFI عند أطراف بولينجر"),
+    "CALL_WALL_REBOUND": StrategySpec(
+        "CALL_WALL_REBOUND",
+        "قنص ارتداد الكول من جدار الدعم (Whale Put-Wall CALL)",
+        "CALL",
+        "4h/1h",
+        2.5,
+        "اقتناص عقود الكول عند وصول السعر لجدار البوت وتفريغ هبوط صناع السوق مع امتصاص السيولة"
+    ),
+    "CALL_WALL_REJECT_PUT": StrategySpec(
+        "CALL_WALL_REJECT_PUT",
+        "قنص عقود البوت من جدار الكول (Call-Wall PUT Dump)",
+        "PUT",
+        "4h/1h",
+        2.5,
+        "شراء عقود البوت قبل الجميع عند اصطدام السعر بجدار المقاومة الكبرى (Call Wall) ورصد كتل بيعية مؤسسية"
+    ),
+    "GAMMA_CASCADE_PUT": StrategySpec(
+        "GAMMA_CASCADE_PUT",
+        "ركوب تسارع الهبوط بالجاما السالبة (Short Gamma Cascade PUT)",
+        "PUT",
+        "1h",
+        2.0,
+        "شراء بوت سريع عندما تكون بيئة صانع السوق (-GEX) والسعر يكسر دعم لحظي مع تدفق سلبي"
+    ),
+    "INSTITUTIONAL_SWEEP_CALL": StrategySpec(
+        "INSTITUTIONAL_SWEEP_CALL",
+        "ركوب كتل الشراء المؤسسية الضخمة (Institutional Block CALL)",
+        "CALL",
+        "1h",
+        2.0,
+        "دخول كول استباقي فور رصد كتل شراء كول بأكثر من 15 مليون دولار من الحيتان"
+    ),
 }
 
 @dataclass
 class Signal:
     spec_id: str
-    side: int  # 1 = BUY, -1 = SELL
+    side: int  # 1 = BUY CALL / LONG, -1 = BUY PUT / SHORT
+    contract_type: str  # "CALL" or "PUT"
+    suggested_strike: float  # السترايك المقترح لعقد الأوبشن
     price: float
     stop_level: float
     target_level: float
@@ -51,176 +83,125 @@ def compute_atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
     tr = np.maximum(h - l, np.maximum(abs(h - c.shift(1)), abs(l - c.shift(1))))
     return tr.rolling(n).mean()
 
-def compute_indicators_4h(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    c, h, l, o = df["close"], df["high"], df["low"], df["open"]
-    df["atr"] = compute_atr(df, 14)
-    df["ema50"] = c.ewm(span=50, adjust=False).mean()
-    df["ema100"] = c.ewm(span=100, adjust=False).mean()
-    df["ema200"] = c.ewm(span=200, adjust=False).mean()
-
-    # Bollinger Bands
-    df["ma20"] = c.rolling(20).mean()
-    std20 = c.rolling(20).std()
-    df["bb_upper"] = df["ma20"] + 2.0 * std20
-    df["bb_lower"] = df["ma20"] - 2.0 * std20
-
-    # Ichimoku Cloud
-    tenkan = (h.rolling(9).max() + l.rolling(9).min()) / 2
-    kijun = (h.rolling(26).max() + l.rolling(26).min()) / 2
-    df["span_a"] = ((tenkan + kijun) / 2).shift(26)
-    df["span_b"] = ((h.rolling(52).max() + l.rolling(52).min()) / 2).shift(26)
-
-    # SMC 30-Bar Low/High (النافذة الذهبية الأعلى ربحاً)
-    df["lo30"] = l.rolling(30).min().shift(1)
-    df["hi30"] = h.rolling(30).max().shift(1)
-
-    return df
-
-def compute_indicators_1h(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    c, h, l = df["close"], df["high"], df["low"]
-    df["atr"] = compute_atr(df, 14)
-
-    # ADX
-    tr = np.maximum(h - l, np.maximum(abs(h - c.shift(1)), abs(l - c.shift(1))))
-    plus_dm = (h - h.shift(1)).clip(lower=0)
-    minus_dm = (l.shift(1) - l).clip(lower=0)
-    tr_14 = tr.rolling(14).sum()
-    plus_di = 100 * (plus_dm.rolling(14).sum() / (tr_14 + 1e-9))
-    minus_di = 100 * (minus_dm.rolling(14).sum() / (tr_14 + 1e-9))
-    dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9))
-    df["adx"] = dx.rolling(14).mean()
-
-    # Bollinger Bands
-    ma20 = c.rolling(20).mean()
-    std20 = c.rolling(20).std()
-    df["bb_upper"] = ma20 + 2.0 * std20
-    df["bb_lower"] = ma20 - 2.0 * std20
-    return df
-
-def compute_indicators_1d(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    c, h = df["close"], df["high"]
-    df["atr"] = compute_atr(df, 14)
-    df["ema50"] = c.ewm(span=50, adjust=False).mean()
-    df["ema200"] = c.ewm(span=200, adjust=False).mean()
-    df["vol_ma"] = df["volume"].rolling(20).mean()
-    df["hi55"] = h.rolling(55).max().shift(1)
-    return df
-
 def scan_signals(df_1h: pd.DataFrame, df_4h: pd.DataFrame, df_1d: pd.DataFrame) -> List[Signal]:
-    """فحص الشموع الأخيرة المغلقة واكتشاف الفرص الحقيقية."""
-    signals = []
+    """فحص واستباق تحركات الحيتان وتدفقات الأوبشن لحظياً."""
+    signals: List[Signal] = []
 
-    # 1. فحص إشارات 4H
-    h4 = compute_indicators_4h(df_4h)
-    d1 = compute_indicators_1d(df_1d)
+    # جلب تدفقات الأوبشن اللحظية من CBOE
+    intel = options_intel.get_options_intel()
+    if not intel.get("ok"):
+        return signals
 
-    cur_4h = h4.iloc[-1]
-    prev_4h = h4.iloc[-2]
-    cur_d1 = d1.iloc[-1]
+    cur_spot = intel["spot"]
+    call_wall = intel.get("tactical_call_wall") or intel.get("call_wall") or (cur_spot * 1.02)
+    put_wall = intel.get("tactical_put_wall") or intel.get("put_wall") or (cur_spot * 0.98)
+    net_gex = intel.get("net_gex", 0.0)
+    flow_bias = intel.get("flow_bias", 0.0)
+    top_blocks = intel.get("top_blocks", [])
 
-    d_bull = cur_d1["close"] > cur_d1["ema50"]
-    d_bear = cur_d1["close"] < cur_d1["ema50"]
+    # قراءة الشموع الفنية اللحظية لـ US500
+    atr_1h = float(compute_atr(df_1h, 14).iloc[-1])
+    cur_1h = df_1h.iloc[-1]
+    prev_1h = df_1h.iloc[-2]
+    cur_price = float(cur_1h["close"])
+    time_str = str(cur_1h["time"])
 
-    # [B] سحابة إيشيموكو وبولينجر 4H (Long-Only مع فلتر الحيتان وفلتر معنويات القطيع)
-    # السر الأسطوري: رفع عتبة قوة الاتجاه الصافي ADX >= 25 لمنع صفقات التذبذب الخامل
-    c_s = h4["close"]
-    net_c = abs(c_s - c_s.shift(14))
-    noise = abs(c_s - c_s.shift(1)).rolling(14).sum()
-    er_val = float((net_c / (noise + 1e-9)).iloc[-1])
-
-    # حساب تدفق السيولة MFI
-    typ = (h4["high"] + h4["low"] + h4["close"]) / 3
-    raw_m = typ * h4["volume"]
-    pos_m = pd.Series(np.where(typ > typ.shift(1), raw_m, 0.0)).rolling(14).sum()
-    neg_m = pd.Series(np.where(typ < typ.shift(1), raw_m, 0.0)).rolling(14).sum()
-    mfi_series = 100 - (100 / (1 + (pos_m / (neg_m + 1e-9))))
-    mfi_val = float(mfi_series.iloc[-1])
-
-    # حساب ADX 4H
-    tr4_s = np.maximum(h4["high"] - h4["low"], np.maximum(abs(h4["high"] - c_s.shift(1)), abs(h4["low"] - c_s.shift(1))))
-    p_dm = (h4["high"] - h4["high"].shift(1)).clip(lower=0)
-    m_dm = (h4["low"].shift(1) - h4["low"]).clip(lower=0)
-    tr_sum = tr4_s.rolling(14).sum()
-    p_di = 100 * (p_dm.rolling(14).sum() / (tr_sum + 1e-9))
-    m_di = 100 * (m_dm.rolling(14).sum() / (tr_sum + 1e-9))
-    adx_4h_val = float((100 * (abs(p_di - m_di) / (p_di + m_di + 1e-9))).rolling(14).mean().iloc[-1])
-
-    # فلتر الدايفرجنس السلبي: السعر يخترق قمة لكن تدفق السيولة MFI هابط (تصريف حيتان)
-    highest_mfi_20 = float(mfi_series.rolling(20).max().shift(1).iloc[-1])
-    is_mfi_divergence = (cur_4h["close"] > float(h4["high"].rolling(20).max().shift(1).iloc[-1])) and (mfi_val < highest_mfi_20 - 5.0)
-
-    # فلتر استشعار معنويات كابيتال: فحص التضخم المفرط في شراء القطيع
+    # معنويات المتداولين في Capital.com (عكس اتجاه القطيع)
     sent = client.get_sentiment(config.EPIC)
-    retail_greed_trap = bool(sent and sent.get("long_pct", 50.0) > 80.0)
+    retail_long_pct = sent.get("long_pct", 50.0) if sent else 50.0
 
-    jesse_buy = (cur_4h["close"] > cur_4h["bb_upper"]) and (cur_4h["close"] > cur_4h["span_a"]) and (cur_4h["close"] > cur_4h["span_b"]) and (cur_4h["close"] > cur_4h["ema200"]) and (adx_4h_val >= 25.0) and (er_val >= 0.35) and (mfi_val >= 50.0) and (not is_mfi_divergence) and (not retail_greed_trap)
+    # 1. إشارة [CALL_WALL_REJECT_PUT]: اصطدام بجدار الكول أو قمة مع رصد كتل بوت
+    dist_to_call_wall = (call_wall - cur_price)
+    has_large_put_block = any(b["type"] == "P" and b["premium"] >= 15_000_000 for b in top_blocks)
     
-    if jesse_buy and not ((prev_4h["close"] > prev_4h["bb_upper"]) and (prev_4h["close"] > prev_4h["span_a"])):
-        entry = float(cur_4h["close"])
-        atr_val = float(cur_4h["atr"])
+    if (-15.0 <= dist_to_call_wall <= 25.0) and (flow_bias <= -0.15 or has_large_put_block) and (cur_1h["close"] < cur_1h["open"]):
+        stop_px = round(max(call_wall, cur_price) + 1.2 * atr_1h, 1)
+        target_px = round(cur_price - 2.5 * abs(stop_px - cur_price), 1)
+        strike_put = round(cur_price / 10) * 10
         signals.append(Signal(
-            spec_id="B", side=1, price=entry,
-            stop_level=round(entry - 2.0 * atr_val, 2),
-            target_level=round(entry + 4.0 * atr_val, 2),
-            time=str(cur_4h["time"]),
-            reasons=["اختراق سحابة إيشيموكو وبولينجر 4H للأعلى", "السعر أعلى من متوسط 200 المؤسسي (الاتجاه الصاعد النقي)", "نمط Long-Only بربح +87% في آخر 3 أشهر"]
+            spec_id="CALL_WALL_REJECT_PUT",
+            side=-1,
+            contract_type="PUT",
+            suggested_strike=strike_put,
+            price=cur_price,
+            stop_level=stop_px,
+            target_level=target_px,
+            time=time_str,
+            reasons=[
+                f"السعر يصطدم بجدار الكول المؤسسي الأقوى (Call Wall: {call_wall:,.0f})",
+                f"رصد تدفقات هبوطية للحيتان (Flow Bias: {flow_bias:+.2f}) مع كتل بوت نشطة",
+                "إغلاق شمعة انعكاسية هابطة على فريم الساعة تؤكد دفاع صناع السوق عن الجدار",
+                f"عقد الأوبشن المقترح: SPX {strike_put:,.0f} PUT"
+            ]
         ))
 
-    # [C] SMC Liquidity Sweep 30-bar 4H (النافذة المحسنة PF 2.10)
-    smc_buy = (cur_4h["low"] < cur_4h["lo30"]) and (cur_4h["close"] > cur_4h["lo30"]) and (cur_4h["close"] > cur_4h["open"]) and (cur_4h["close"] > cur_4h["ema100"])
-    if smc_buy and not (prev_4h["low"] < prev_4h["lo30"] and prev_4h["close"] > prev_4h["lo30"]):
-        entry = float(cur_4h["close"])
-        atr_val = float(cur_4h["atr"])
+    # 2. إشارة [CALL_WALL_REBOUND]: ارتداد كول من جدار البوت الرئيسي
+    dist_to_put_wall = (cur_price - put_wall)
+    has_large_call_block = any(b["type"] == "C" and b["premium"] >= 15_000_000 for b in top_blocks)
+
+    if (-25.0 <= dist_to_put_wall <= 30.0) and (cur_1h["close"] > cur_1h["open"]) and (flow_bias >= 0.05 or has_large_call_block or retail_long_pct < 40.0):
+        stop_px = round(min(put_wall, cur_price) - 1.2 * atr_1h, 1)
+        target_px = round(cur_price + 2.5 * abs(cur_price - stop_px), 1)
+        strike_call = round(cur_price / 10) * 10
         signals.append(Signal(
-            spec_id="C", side=1, price=entry,
-            stop_level=round(entry - 1.5 * atr_val, 2),
-            target_level=round(entry + 3.0 * atr_val, 2),
-            time=str(cur_4h["time"]),
-            reasons=["كنس سيولة عميق (كسر قاع 30 شمعة 4H ثم ارتداد قوي)", "إغلاق شمعة 4H خضراء فوق مستوى القاع المكسور", "السعر فوق متوسط EMA100 المؤسسي"]
+            spec_id="CALL_WALL_REBOUND",
+            side=1,
+            contract_type="CALL",
+            suggested_strike=strike_call,
+            price=cur_price,
+            stop_level=stop_px,
+            target_level=target_px,
+            time=time_str,
+            reasons=[
+                f"السعر يلامس جدار البوت المؤسسي (Put Wall: {put_wall:,.0f}) مع امتصاص البيع",
+                "ارتداد صاعد مع شمعة ارتدادية خضراء تدل على انتهاء موجة التصريف",
+                "صناع السوق مجبرون على شراء المؤشر لتغطية ��لتا الجاما المفتوحة",
+                f"عقد الأوبشن المقترح: SPX {strike_call:,.0f} CALL"
+            ]
         ))
 
-    # [D] قنص تحركات الحيتان في التذبذب (Whale Shadow Accumulation/Distribution)
-    # تجميع الحيتان (Whale Pump): السعر عند قاع بولينجر وتدفق السيولة قوي MFI > 52 وشمعة خضراء
-    whale_pump = (cur_4h["low"] <= cur_4h["bb_lower"]) and (mfi_val > 52.0) and (cur_4h["close"] > cur_4h["open"])
-    # تصريف الحيتان (Whale Dump): السعر عند قمة بولينجر وتدفق السيولة ضعيف MFI < 48 وشمعة حمراء
-    whale_dump = (cur_4h["high"] >= cur_4h["bb_upper"]) and (mfi_val < 48.0) and (cur_4h["close"] < cur_4h["open"])
-
-    if whale_pump and not ((prev_4h["low"] <= prev_4h["bb_lower"]) and (prev_4h["close"] > prev_4h["open"])):
-        entry = float(cur_4h["close"])
-        atr_val = float(cur_4h["atr"])
+    # 3. إشارة [GAMMA_CASCADE_PUT]: تسارع هبوط بالجاما السالبة (Short Gamma Cascade)
+    if net_gex < -15_000_000_000 and flow_bias < -0.25 and (cur_1h["close"] < prev_1h["low"]) and (cur_1h["close"] < cur_1h["open"]):
+        stop_px = round(prev_1h["high"] + 0.8 * atr_1h, 1)
+        target_px = round(cur_price - 2.0 * abs(stop_px - cur_price), 1)
+        strike_put = round((cur_price - 10) / 10) * 10
         signals.append(Signal(
-            spec_id="D", side=1, price=entry,
-            stop_level=round(entry - 1.5 * atr_val, 2),
-            target_level=round(entry + 2.5 * atr_val, 2),
-            time=str(cur_4h["time"]),
-            reasons=["تجميع حيتان خفي (Whale Accumulation)", "السعر عند قاع بولينجر لكن تدفق السيولة MFI صاعد بقوة", "إغلاق شمعة ارتدادية صاعدة خضراء"]
-        ))
-    elif whale_dump and not ((prev_4h["high"] >= prev_4h["bb_upper"]) and (prev_4h["close"] < prev_4h["open"])):
-        entry = float(cur_4h["close"])
-        atr_val = float(cur_4h["atr"])
-        signals.append(Signal(
-            spec_id="D", side=-1, price=entry,
-            stop_level=round(entry + 1.5 * atr_val, 2),
-            target_level=round(entry - 2.5 * atr_val, 2),
-            time=str(cur_4h["time"]),
-            reasons=["تصريف حيتان خفي (Whale Distribution)", "السعر عند قمة بولينجر لكن تدفق السيولة MFI هابط وضعيف", "إغلاق شمعة انعكاسية هابطة حمراء"]
+            spec_id="GAMMA_CASCADE_PUT",
+            side=-1,
+            contract_type="PUT",
+            suggested_strike=strike_put,
+            price=cur_price,
+            stop_level=stop_px,
+            target_level=target_px,
+            time=time_str,
+            reasons=[
+                f"بيئة غاما سالبة عنيفة (-GEX: {options_intel.format_money(net_gex)}) تجبر صانع السوق على بيع المؤشر مع كل هبوط",
+                f"كسر قاع الشمعة السابقة مع تدفق كتل بيعية صافية بنسبة {flow_bias:+.2f}",
+                "تسارع هبوطي حر مع ضعف طلبات الشراء المؤسسية",
+                f"عقد الأوبشن المقترح: SPX {strike_put:,.0f} PUT"
+            ]
         ))
 
-    # [A] الانفجار الشهري المؤسسي (Donchian 55 Daily Breakout)
-    prev_d1 = d1.iloc[-2]
-    don_buy = (cur_d1["close"] > cur_d1["hi55"]) and (cur_d1["close"] > cur_d1["ema200"])
-    if don_buy and not (prev_d1["close"] > prev_d1["hi55"]):
-        entry = float(cur_d1["close"])
-        atr_val = float(cur_d1["atr"])
+    # 4. إشارة [INSTITUTIONAL_SWEEP_CALL]: رصد كتل شراء كول ضخمة
+    if has_large_call_block and flow_bias > 0.30 and (cur_1h["close"] > cur_1h["open"]):
+        stop_px = round(cur_1h["low"] - 1.0 * atr_1h, 1)
+        target_px = round(cur_price + 2.0 * abs(cur_price - stop_px), 1)
+        top_c = next(b for b in top_blocks if b["type"] == "C")
+        strike_call = top_c["strike"]
         signals.append(Signal(
-            spec_id="A", side=1, price=entry,
-            stop_level=round(entry - 2.0 * atr_val, 2),
-            target_level=round(entry + 5.0 * atr_val, 2),
-            time=str(cur_d1["time"]),
-            reasons=["اختراق قمة 55 يوماً التاريخية (الانفجار الشهري الأسطوري)", "السعر أعلى من متوسط 200 يوم المؤسسي", "معامل ربح تاريخي 3.09 ومتوسط ربح +31%"]
+            spec_id="INSTITUTIONAL_SWEEP_CALL",
+            side=1,
+            contract_type="CALL",
+            suggested_strike=strike_call,
+            price=cur_price,
+            stop_level=stop_px,
+            target_level=target_px,
+            time=time_str,
+            reasons=[
+                f"رصد كتل شراء CALL مؤسسية ضخمة بقيمة {options_intel.format_money(top_c['premium'])} عند سترايك {top_c['strike']:,.0f}",
+                f"سيطرة تدفقات الشراء الصريحة للحيتان (Flow Bias: {flow_bias:+.2f})",
+                f"عقد الأوبشن المقترح المستهدف من الحيتان: SPX {strike_call:,.0f} CALL"
+            ]
         ))
 
     return signals

@@ -116,6 +116,8 @@ def evaluate_and_trade() -> Tuple[List[Dict[str, Any]], List[str]]:
         trade_record = {
             "spec_id": spec_id,
             "strat_name": sig.spec.name,
+            "contract_type": sig.contract_type,
+            "suggested_strike": sig.suggested_strike,
             "direction": direction,
             "entry": sig.price,
             "stop_level": sig.stop_level,

@@ -319,20 +319,23 @@ async def background_watcher():
             actions, logs = await asyncio.to_thread(engine.evaluate_and_trade)
             if actions and bot:
                 for act in actions:
-                    icon = "🟢" if act["direction"] == "BUY" else "🔴"
+                    contract_icon = "🟢 CALL" if act.get("contract_type") == "CALL" else "🔴 PUT"
+                    side_icon = "🟢 شراء" if act["direction"] == "BUY" else "🔴 بيع"
+                    strike_str = f"SPX {act.get('suggested_strike', 0):,.0f} {act.get('contract_type')}"
                     msg = (
-                        f"🚨 <b>إشارة تداول مؤكدة جديدة على US500!</b>\n\n"
-                        f"🎯 الاستراتيجية: <b>{act['strat_name']}</b>\n"
-                        f"{icon} الاتجاه: <b>{act['direction']}</b>\n"
-                        f"💰 سعر الدخول: <code>{act['entry']:,.1f}</code>\n"
+                        f"🚨 <b>إشارة أوبشن مؤسسية استباقية (SPX / US500)!</b>\n\n"
+                        f"⚡ نوع العقد: <b>{contract_icon}</b>\n"
+                        f"🎯 السترايك المقترح: <code>{strike_str}</code>\n"
+                        f"🏛 الاستراتيجية: <b>{act['strat_name']}</b>\n"
+                        f"💰 سعر الدخول بالمؤشر: <code>{act['entry']:,.1f}</code>\n"
                         f"🛑 وقف الخسارة: <code>{act['stop_level']:,.1f}</code>\n"
-                        f"🎯 الهدف المقترح: <code>{act['target_level']:,.1f}</code>\n"
-                        f"💼 حجم العقد: <code>{act['size']} عقود</code>\n"
+                        f"🎯 الهدف: <code>{act['target_level']:,.1f}</code>\n"
+                        f"💼 حجم التداول الموازي (كابيتال): <code>{act['size']} عقود</code>\n"
                     )
                     if act.get("deal_id"):
                         msg += f"⚡ <b>تم فتح الصفقة تلقائياً على Capital.com!</b>\nمعرف الصفقة: <code>{act['deal_id']}</code>\n"
                     if act.get("reasons"):
-                        msg += "\n<b>الأسباب الفنية:</b>\n" + "\n".join(f"  • {r}" for r in act["reasons"])
+                        msg += "\n<b>أسباب دخول الحيتان وصناع السوق:</b>\n" + "\n".join(f"  • {r}" for r in act["reasons"])
 
                     # إرسال للمسؤول والقناة إن وجدت
                     if config.ADMIN_CHAT_ID:
