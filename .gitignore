@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+price_alerts.json
+last_alert.txt
+settings.json
+
+report_cache.json
+tools_*.py
+.session.json
+*.csv
+lab_*.py
+*.log
