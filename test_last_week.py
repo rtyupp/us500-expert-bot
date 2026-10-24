@@ -1,14 +1,16 @@
-"""محاكاة كاملة ودقيقة لاختبار أداء البوت في الأسبوع الماضي (16 - 23 أكتوبر 2026)."""
+"""محاكاة كاملة ودقيقة لاختبار أداء بوت US500 في الأسبوع الماضي (16 - 23 أكتوبر 2026)."""
 import sys
-sys.path.append("C:/Users/lsyry/projects/bitcoin-expert-bot")
+import os
+sys.path.insert(0, "C:/Users/lsyry/projects/us500-expert-bot")
+import config
 from capital_trader import client
 import strategy as S
 import pandas as pd
 import numpy as np
 
-c_1h = client.get_prices("BTCUSD", resolution="HOUR", max_candles=250)
-c_4h = client.get_prices("BTCUSD", resolution="HOUR_4", max_candles=150)
-c_1d = client.get_prices("BTCUSD", resolution="DAY", max_candles=100)
+c_1h = client.get_prices(config.EPIC, resolution="HOUR", max_candles=300)
+c_4h = client.get_prices(config.EPIC, resolution="HOUR_4", max_candles=150)
+c_1d = client.get_prices(config.EPIC, resolution="DAY", max_candles=100)
 
 df_1h = pd.DataFrame(c_1h)
 df_4h = pd.DataFrame(c_4h)
@@ -21,7 +23,7 @@ df_1d["time"] = pd.to_datetime(df_1d["time"])
 start_date = pd.to_datetime("2026-10-16 00:00:00")
 
 print("═════════════════════════════════════════════════════════════════")
-print("📊 فحص الصفقات المنفذة في الأسبوع الماضي (16 إلى 23 أكتوبر 2026)")
+print(f"📊 فحص صفقات {config.EPIC} المنفذة في الأسبوع الماضي (16 إلى 23 أكتوبر 2026)")
 print("═════════════════════════════════════════════════════════════════\n")
 
 slots = {"A": None, "B": None, "C": None, "D": None}
@@ -57,7 +59,7 @@ for idx in range(30, len(df_1h)):
             if not tr["moved_be"] and floating_gain >= 0.8 * initial_risk:
                 tr["stop"] = entry
                 tr["moved_be"] = True
-                print(f"   🔒 [تأمين الصفقة] نقل الوقف إلى نقطة الدخول ${entry:,.1f} [{s_id}] عند {curr_t}")
+                print(f"   🔒 [تأمين الصفقة] نقل الوقف إلى نقطة الدخول {entry:,.1f} [{s_id}] عند {curr_t}")
 
             hit = None
             if side == 1:
@@ -91,7 +93,7 @@ for idx in range(30, len(df_1h)):
             }
             side_str = "🟢 شراء (BUY)" if sig.side == 1 else "🔴 بيع (SELL)"
             print(f"[{curr_t}] {side_str} [{s_id} - {sig.spec.name}]")
-            print(f"      سعر الدخول: ${sig.price:,.1f} | الوقف: ${sig.stop_level:,.1f} | الهدف: ${sig.target_level:,.1f} (1:{rr})")
+            print(f"      سعر الدخول: {sig.price:,.1f} | الوقف: {sig.stop_level:,.1f} | الهدف: {sig.target_level:,.1f} (1:{rr})")
 
 # تفقد إذا كان هناك صفقات ما زالت مستمرة حتى الآن
 still_active = [v for v in slots.values() if v is not None]
@@ -114,5 +116,5 @@ if finished_trades:
 if still_active:
     print(f"\n• الصفقات المستمرة حالياً:")
     for sa in still_active:
-        print(f"   ▫️ [{sa['id']}] {sa['name']} مفتوحة عند ${sa['entry']:,.1f}")
+        print(f"   ▫️ [{sa['id']}] {sa['name']} مفتوحة عند {sa['entry']:,.1f}")
 print("═════════════════════════════════════════════════════════════════")
