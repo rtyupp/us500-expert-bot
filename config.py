@@ -1,5 +1,20 @@
 """إعدادات بوت US500 (S&P 500) والتداول عبر Capital.com."""
 import os
+from pathlib import Path
+
+_ENV_FILE = Path(__file__).with_name(".env")
+
+def _load_env_file() -> None:
+    if not _ENV_FILE.exists():
+        return
+    for raw in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+_load_env_file()
 
 # تيليجرام
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8934702570:AAF8zX_iErjTlhws86a4CUj4a24fIOeJ6-w")
