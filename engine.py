@@ -70,6 +70,9 @@ def evaluate_and_trade() -> Tuple[List[Dict[str, Any]], List[str]]:
     open_positions = client.get_open_positions(config.EPIC)
     open_deal_ids = {p["deal_id"]: p for p in open_positions}
 
+    # إذا كان هناك أي صفقة مفتوحة في المنصة لـ US500، نمنع فتح أي صفقة جديدة نهائياً!
+    has_any_open_position = len(open_positions) > 0
+
     # التحقق من الصفقات المغلقة لإزالتها من الذاكرة
     for spec_id, tr_info in list(active.items()):
         deal_id = tr_info.get("deal_id")
@@ -103,6 +106,10 @@ def evaluate_and_trade() -> Tuple[List[Dict[str, Any]], List[str]]:
 
     auto_trade_enabled = state.is_auto_trade()
     risk_pct = state.get_risk_pct()
+
+    # إذا كان هناك صفقة قائمة في المنصة أو في الذاكرة، نمنع الدخول تماماً
+    if has_any_open_position or len(active) > 0:
+        return actions_taken, logs
 
     for sig in signals:
         spec_id = sig.spec_id

@@ -92,6 +92,14 @@ def scan_signals(df_1h: pd.DataFrame, df_4h: pd.DataFrame, df_1d: pd.DataFrame) 
     is_bear = cur_px < ema50_1h
     is_bull = cur_px > ema50_1h
 
+    # كفاءة الحركة لمنع الفخاخ أثناء التذبذب (Kaufman Efficiency Ratio)
+    c15 = df_15m['close'].astype(float)
+    change = (c15 - c15.shift(16)).abs().iloc[-1]
+    vol = (c15 - c15.shift(1)).abs().rolling(16).sum().iloc[-1]
+    er = change / (vol + 1e-9)
+    if er < 0.25:
+        return signals # السوق في تذبذب حائر، ممنوع الدخول
+
     # 1. إشارة PUT بعد شمعة التأكيد
     put_confirm = (prev1['high'] > prev1['hi16']) and (prev1['close'] < prev1['open']) and (row['close'] < prev1['low']) and is_bear
     # 2. إشارة CALL بعد شمعة التأكيد
