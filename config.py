@@ -27,7 +27,7 @@ CAPITAL_EMAIL = os.environ.get("CAPITAL_EMAIL", "lsyry3247@gmail.com")
 CAPITAL_API_KEY = os.environ.get("CAPITAL_API_KEY", "Iw25M1vmcgxt487o")
 CAPITAL_API_PASSWORD = os.environ.get("CAPITAL_API_PASSWORD", "Ali1213141516.")
 CAPITAL_ENV = os.environ.get("CAPITAL_ENV", "demo").lower()  # demo | live
-AUTO_TRADE = os.environ.get("CAPITAL_AUTO_TRADE", "1") == "1"
+AUTO_TRADE = os.environ.get("CAPITAL_AUTO_TRADE", "0") == "1"
 
 # إدارة الصفقات
 EPIC = "US500"

@@ -13,7 +13,7 @@ _STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
 _LOCK = threading.Lock()
 
 DEFAULT_STATE: Dict[str, Any] = {
-    "auto_trade": True,
+    "auto_trade": False,
     "risk_pct": 1.0,
     "active_trades": {},  # مفتاح: spec_id -> {deal_id, direction, entry, stop, tp, moved_be}
     "history": [],
